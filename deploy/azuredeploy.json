@@ -1,0 +1,126 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "appServiceName": {
+            "type": "string",
+            "metadata": {
+                "description": "DNS name of your website"
+            }
+        },
+        "sqlServerAdminPassword": {
+            "type": "securestring"
+        }
+    },
+    "variables": {
+        "appServicePlanPortalName": "[concat('plan-', parameters('appServiceName'))]",
+        "communicationServiceName": "[concat('acs-', parameters('appServiceName'))]",
+        "sqlServerName": "[concat('sql-', parameters('appServiceName'))]",
+        "communicationServiceDataLocation": "United States",
+        "sku": "F1"
+    },
+    "resources": [
+        {
+            "name": "[variables('communicationServiceName')]",
+            "type": "Microsoft.Communication/communicationServices",
+            "apiVersion": "2020-08-20",
+            "location": "global",
+            "tags": {},
+            "properties": {
+                "dataLocation": "[variables('communicationServiceDataLocation')]"
+            }
+        },
+        {
+            "type": "Microsoft.Sql/servers",
+            "apiVersion": "2021-11-01-preview",
+            "name": "[variables('sqlServerName')]",
+            "location": "[resourceGroup().location]",
+            "kind": "v12.0",
+            "properties": {
+                "administratorLogin": "acsAdmin",
+                "administratorLoginPassword": "[parameters('sqlServerAdminPassword')]",
+                "version": "12.0",
+                "publicNetworkAccess": "Enabled",
+                "restrictOutboundNetworkAccess": "Disabled"
+            },
+            "resources": [
+                {
+                    "name": "AllowAllMicrosoftAzureIps",
+                    "type": "firewallrules",
+                    "apiVersion": "2020-08-01-preview",
+                    "location": "[resourceGroup().location]",
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+                    ],
+                    "properties": {
+                        "endIpAddress": "0.0.0.0",
+                        "startIpAddress": "0.0.0.0"
+                    }
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.Web/serverfarms",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('appServicePlanPortalName')]",
+            "location": "[resourceGroup().location]",
+            "kind": "linux",
+            "sku": {
+                "name": "[variables('sku')]"
+            },
+            "properties": {
+                "reserved": true
+            }
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "apiVersion": "2020-06-01",
+            "name": "[parameters('appServiceName')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanPortalName'))]",
+                "[resourceId('Microsoft.Communication/communicationServices', variables('communicationServiceName'))]",
+                "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+            ],
+            "kind": "app,linux,container",
+            "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanPortalName'))]",
+                "httpsOnly": true,
+                "siteConfig": {
+                    "linuxFxVersion": "DOCKER|crmikhailfhl.azurecr.io/acs-app-box:latest",
+                    "appSettings": [
+                        {
+                            "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+                            "value": "false"
+                        },
+                        {
+                            "name": "ASPNETCORE_FORWARDEDHEADERS_ENABLED",
+                            "value": "true"
+                        },
+                        {
+                            "name": "Provider",
+                            "value": "SqlServer"
+                        },
+                        {
+                            "name": "IdentityServer__IssuerUri",
+                            "value": "[concat('https://', parameters('appServiceName'), '.azurewebsites.net')]"
+                        }
+                    ],
+                    "connectionStrings": [
+                        {
+                            "name": "ACSConnectionString",
+                            "type": "Custom",
+                            "connectionString": "[listkeys(resourceId('Microsoft.Communication/communicationServices', variables('communicationServiceName')), '2020-08-20').primaryConnectionString]"
+                        },
+                        {
+                            "name": "SqlServerConnectionString",
+                            "type": "SQLServer",
+                            "connectionString": "[concat('Data Source=tcp:', reference(concat('Microsoft.Sql/servers/', variables('sqlServerName'))).fullyQualifiedDomainName, ',1433;Initial Catalog=ACSAppBox', ';User Id=', 'acsAdmin', ';Password=', parameters('sqlServerAdminPassword'), ';')]"
+                        }
+                    ]
+                }
+            }
+        }
+    ]
+}
+  
